@@ -1,9 +1,11 @@
 out_dir: data/models/base_M/
 model_params:
+  # arch: vit # model architecture from torchvision namespace
   arch: resnet50 # model architecture from torchvision namespace
   weights: null # null -> all models are initialized with "ImageNet" weights or path to .ckpt to initialize from pre-trained model
-  batch_size: 128
-  val_check_interval: 4000 # validate after x steps (batches) i.e. batch_size*val_check_interval = n images
+  # batch_size: 32 # batch size for training ViT
+  batch_size: 128 # batch size for training ResNet
+  val_check_interval: 10 # validate after x steps (batches) i.e. batch_size*val_check_interval = n images
   optim:
     # SGD
     params:

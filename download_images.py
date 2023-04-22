@@ -1,22 +1,24 @@
-from argparse import ArgumentParser
-import sys
-from io import BytesIO
-from pathlib import Path
-import time
-from multiprocessing import Pool
-from functools import partial
-import re
 import logging
-import requests
+import re
+import sys
+import time
+from argparse import ArgumentParser
+from functools import partial
+from io import BytesIO
+from multiprocessing import Pool
+from pathlib import Path
 
 import msgpack
 import pandas as pd
 import PIL
+import requests
 from PIL import ImageFile
-
+from requests.adapters import HTTPAdapter
+from requests.packages.urllib3.util.retry import Retry
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
-
+logger = logging.getLogger("ImageDownloader")
+logger.setLevel(logging.INFO)
 
 class MsgPackWriter:
     def __init__(self, path, chunk_size=4096):
@@ -76,10 +78,23 @@ def _thumbnail(img: PIL.Image, size: int) -> PIL.Image:
         return img.resize((ow, oh), PIL.Image.BILINEAR)
 
 
-def flickr_download(x, size_suffix="z", min_edge_size=None):
+def flickr_download(x, size_suffix="z", min_edge_size=None, retries=3, backoff_factor=0.3):
 
     # prevent downloading in full resolution using size_suffix
     # https://www.flickr.com/services/api/misc.urls.html
+
+    def create_session(retries, backoff_factor):
+        session = requests.Session()
+        retry = Retry(
+            total=retries,
+            backoff_factor=backoff_factor,
+            status_forcelist=[429, 500, 502, 503, 504],
+            method_whitelist=["HEAD", "GET", "OPTIONS"]
+        )
+        adapter = HTTPAdapter(max_retries=retry)
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+        return session
 
     image_id = x["image_id"]
     url_original = x["url"]
@@ -90,8 +105,21 @@ def flickr_download(x, size_suffix="z", min_edge_size=None):
         url = f"{url.split(ext)[0]}_{size_suffix}{ext}"
     else:
         url = url_original
+    # Add a header to prevent 403 error
+    headers = {
+    "User-Agent": "User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36 Edg/91.0.864.59",
+    "Accept-Encoding": "*",
+    "Connection": "keep-alive"
+    }
 
-    r = requests.get(url)
+    session = create_session(retries, backoff_factor)
+
+    try:
+        r = session.get(url, headers=headers)
+    except requests.exceptions.RequestException as e:
+        logger.error(f"{image_id} : {url}: {e}")
+        return None
+    
     if r:
         try:
             image = PIL.Image.open(BytesIO(r.content))
@@ -181,7 +209,6 @@ def parse_args():
 
 
 def main():
-
     image_loader = ImageDataloader(args.url_csv, nrows=args.nrows, shuffle=args.shuffle)
 
     counter_successful = 0

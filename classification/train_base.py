@@ -14,12 +14,19 @@ from classification import utils_global
 from classification.s2_utils import Partitioning, Hierarchy
 from classification.dataset import MsgPackIterableDatasetMultiTargetWithDynLabels
 
+from transformers import (AutoImageProcessor, ViTConfig,
+                          ViTForImageClassification, ViTModel, ViTFeatureExtractor)
+
+
+logger = logging.getLogger("ImageDownloader")
+logger.setLevel(logging.INFO)
 
 class MultiPartitioningClassifier(pl.LightningModule):
     def __init__(self, hparams: Namespace):
         super().__init__()
         self.hparams = hparams
-
+        self.feature_extractor = ViTFeatureExtractor.from_pretrained("google/vit-base-patch16-224")
+        self.image_processor = AutoImageProcessor.from_pretrained("google/vit-base-patch16-224-in21k")
         self.partitionings, self.hierarchy = self.__init_partitionings()
         self.model, self.classifier = self.__build_model()
 
@@ -39,7 +46,19 @@ class MultiPartitioningClassifier(pl.LightningModule):
 
     def __build_model(self):
         logging.info("Build model")
-        model, nfeatures = utils_global.build_base_model(self.hparams.arch)
+        # ======================== CNN ========================
+        if "vit" in self.hparams.arch:
+            print("======================== ViT ========================")
+            config = ViTConfig.from_pretrained('google/vit-base-patch16-224')
+            config.num_labels = 0  # Remove the classification head
+            model = ViTModel.from_pretrained('google/vit-base-patch16-224', config=config)
+
+            nfeatures = model.config.hidden_size
+        else:
+            print("======================== CNN ========================")
+            print("arch: ", self.hparams.arch)
+            print("batch_size: ", self.hparams.batch_size)
+            model, nfeatures = utils_global.build_base_model(self.hparams.arch)
 
         classifier = torch.nn.ModuleList(
             [
@@ -55,11 +74,18 @@ class MultiPartitioningClassifier(pl.LightningModule):
             )
 
         return model, classifier
-
+    
     def forward(self, x):
-        fv = self.model(x)
-        yhats = [self.classifier[i](fv) for i in range(len(self.partitionings))]
-        return yhats
+        if "vit" in self.hparams.arch:
+            outputs = self.model(x)
+            fv = outputs.last_hidden_state[:, 0, :] # ViT
+            # fv = outputs['logits'] # ViTForImageClassification
+            yhats = [self.classifier[i](fv) for i in range(len(self.partitionings))]
+            return yhats
+        else:
+            fv = self.model(x)
+            yhats = [self.classifier[i](fv) for i in range(len(self.partitionings))]
+            return yhats
 
     def training_step(self, batch, batch_idx, optimizer_idx=None):
         images, target = batch
@@ -399,7 +425,7 @@ def main():
     model_params = config["model_params"]
     trainer_params = config["trainer_params"]
 
-    utils_global.check_is_valid_torchvision_architecture(model_params["arch"])
+    # utils_global.check_is_valid_torchvision_architecture(model_params["arch"])
 
     out_dir = Path(config["out_dir"]) / datetime.now().strftime("%y%m%d-%H%M")
     out_dir.mkdir(exist_ok=True, parents=True)

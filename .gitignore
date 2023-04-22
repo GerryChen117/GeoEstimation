@@ -5,7 +5,8 @@
 mp16_places365.csv
 *.json
 !cfg_ex.json
-
+/data
+/lightning_logs
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
